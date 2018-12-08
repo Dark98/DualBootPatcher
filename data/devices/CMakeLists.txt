@@ -6,20 +6,26 @@ set(files
     360.yml
     acer.yml
     alcatel.yml
+    amazon.yml
     archos.yml
     ark.yml
     asus.yml
     blu.yml
+    bq.yml
     cagabi.yml
     cherrymobile.yml
+    cmcc.yml
     coolpad.yml
     dexp.yml
     doogee.yml
     elephone.yml
+    energy_sistem.yml
+    ginzzu.yml
     gionee.yml
     google.yml
     gree.yml
     htc.yml
+    homtom.yml
     huawei.yml
     infinix.yml
     infocus.yml
@@ -34,6 +40,7 @@ set(files
     meizu.yml
     motorola.yml
     nokia.yml
+    nextbit.yml
     nexus.yml
     nubia.yml
     oneplus.yml

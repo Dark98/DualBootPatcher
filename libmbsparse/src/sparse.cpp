@@ -59,12 +59,9 @@
 #  define OPER(...)
 #endif
 
-namespace mb
+namespace mb::sparse
 {
-using namespace detail;
-
-namespace sparse
-{
+using namespace mb::detail;
 using namespace detail;
 
 static void fix_sparse_header_byte_order(SparseHeader &header)
@@ -442,7 +439,7 @@ oc::result<size_t> SparseFile::on_read(void *buf, size_t size)
             break;
         }
         case CHUNK_TYPE_DONT_CARE:
-            memset(buf, 0, static_cast<size_t>(to_read));
+            std::fill_n(reinterpret_cast<unsigned char *>(buf), to_read, 0);
             n_read = to_read;
             break;
         default:
@@ -534,11 +531,7 @@ void SparseFile::clear()
 
 oc::result<void> SparseFile::wread(void *buf, size_t size)
 {
-    auto ret = file_read_exact(*m_file, buf, size);
-    if (!ret) {
-        set_fatal();
-        return ret.as_failure();
-    }
+    OUTCOME_TRYV(file_read_exact(*m_file, buf, size));
 
     m_cur_src_offset += size;
     return oc::success();
@@ -576,9 +569,10 @@ oc::result<void> SparseFile::skip_bytes(uint64_t bytes)
 
         if (discarded != bytes) {
             DEBUG("Reached EOF when skipping bytes");
-            set_fatal();
             return FileError::UnexpectedEof;
         }
+
+        m_cur_src_offset += bytes;
         return oc::success();
     }
 
@@ -915,7 +909,6 @@ oc::result<void> SparseFile::move_to_chunk(uint64_t offset)
             DEBUG("Internal error: src_begin (%" PRIu64 ")"
                   " < cur_src_offset (%" PRIu64 ")",
                   src_begin, m_cur_src_offset);
-            set_fatal();
             return SparseFileError::InternalError;
         }
 
@@ -923,7 +916,6 @@ oc::result<void> SparseFile::move_to_chunk(uint64_t offset)
         if (!skip_ret) {
             DEBUG("Failed to skip to chunk #%" MB_PRIzu ": %s",
                   chunk_num, skip_ret.error().message().c_str());
-            set_fatal();
             return skip_ret.as_failure();
         }
 
@@ -933,7 +925,6 @@ oc::result<void> SparseFile::move_to_chunk(uint64_t offset)
         if (!read_ret) {
             DEBUG("Failed to read chunk header for chunk %" MB_PRIzu ": %s",
                   chunk_num, read_ret.error().message().c_str());
-            set_fatal();
             return read_ret.as_failure();
         }
 
@@ -950,32 +941,25 @@ oc::result<void> SparseFile::move_to_chunk(uint64_t offset)
             DEBUG("Failed to skip extra bytes in chunk #%" MB_PRIzu
                   "'s header: %s", chunk_num,
                   skip_ret.error().message().c_str());
-            set_fatal();
             return skip_ret.as_failure();
         }
 
-        auto chunk_info = process_chunk(chdr, tgt_begin);
-        if (!chunk_info) {
-            set_fatal();
-            return chunk_info.as_failure();
-        }
-        auto &&ci = chunk_info.value();
+        OUTCOME_TRY(chunk_info, process_chunk(chdr, tgt_begin));
 
         OPER("Chunk #%" MB_PRIzu " covers source range (%" PRIu64 " - %" PRIu64 ")",
-             chunk_num, ci.src_begin, ci.src_end);
+             chunk_num, chunk_info.src_begin, chunk_info.src_end);
         OPER("Chunk #%" MB_PRIzu " covers output range (%" PRIu64 " - %" PRIu64 ")",
-             chunk_num, ci.begin, ci.end);
+             chunk_num, chunk_info.begin, chunk_info.end);
 
         // Make sure the chunk does not end after the header-specified file size
-        if (ci.end > m_file_size) {
+        if (chunk_info.end > m_file_size) {
             DEBUG("Chunk #%" MB_PRIzu " ends (%" PRIu64 ") after the file size "
                   "specified in the sparse header (%" PRIu64 ")",
-                  chunk_num, ci.end, m_file_size);
-            set_fatal();
+                  chunk_num, chunk_info.end, m_file_size);
             return SparseFileError::InvalidChunkBounds;
         }
 
-        m_chunks.push_back(std::move(ci));
+        m_chunks.push_back(std::move(chunk_info));
 
         // If we just read the last chunk, make sure it ends at the same
         // position as specified in the sparse header
@@ -984,7 +968,6 @@ oc::result<void> SparseFile::move_to_chunk(uint64_t offset)
             DEBUG("Last chunk does not end (%" PRIu64 ") at position"
                   " specified by sparse header (%" PRIu64 ")",
                   m_chunks.back().end, m_file_size);
-            set_fatal();
             return SparseFileError::InvalidChunkBounds;
         }
 
@@ -1000,5 +983,4 @@ oc::result<void> SparseFile::move_to_chunk(uint64_t offset)
     return oc::success();
 }
 
-}
 }

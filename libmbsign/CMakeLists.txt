@@ -13,7 +13,12 @@ foreach(variant ${variants})
     string(TOUPPER ${variant} uvariant)
 
     # Build library
-    add_library(${lib_target} ${uvariant} src/mbsign.cpp)
+    add_library(
+        ${lib_target}
+        ${uvariant}
+        src/error.cpp
+        src/sign.cpp
+    )
 
     # Includes
     target_include_directories(
@@ -34,7 +39,6 @@ foreach(variant ${variants})
         ${lib_target}
         PUBLIC
         mbcommon-${variant}
-        mblog-${variant}
         OpenSSL::Crypto
         PRIVATE
         interface.global.CXXVersion
@@ -72,6 +76,10 @@ if(variants AND MBP_ENABLE_TESTS)
         gtest
         gtest_main
     )
+
+    if(${MBP_BUILD_TARGET} STREQUAL android-system)
+        unix_link_executable_statically(mbsign_tests)
+    endif()
 
     # Add to ctest
     add_test(

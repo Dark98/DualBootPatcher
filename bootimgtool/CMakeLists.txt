@@ -34,6 +34,7 @@ foreach(variant ${variants})
         mbbootimg-${variant}
         mbpio-${variant}
         mbcommon-${variant}
+        rapidjson
     )
 
     # Link dependencies
@@ -48,14 +49,7 @@ foreach(variant ${variants})
             )
         endif()
     elseif(${variant} STREQUAL static)
-        set_target_properties(
-            ${bin_target}
-            PROPERTIES
-            LINK_FLAGS "-static"
-            LINK_SEARCH_START_STATIC ON
-        )
-
-        android_link_allow_multiple_definitions(${bin_target})
+        unix_link_executable_statically(${bin_target})
     endif()
 
     # Install binary

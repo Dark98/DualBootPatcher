@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017  Andrew Gunnerson <andrewgunnerson@gmail.com>
+ * Copyright (C) 2017-2018  Andrew Gunnerson <andrewgunnerson@gmail.com>
  *
  * This file is part of DualBootPatcher
  *
@@ -23,11 +23,7 @@
 
 #include <system_error>
 
-namespace mb
-{
-namespace bootimg
-{
-namespace android
+namespace mb::bootimg::android
 {
 
 enum class AndroidError
@@ -37,11 +33,10 @@ enum class AndroidError
     // Android header errors
     HeaderNotFound          = 10,
     HeaderOutOfBounds       = 11,
-    HeaderSetFieldsFailed   = 12,
-    InvalidPageSize         = 13,
-    MissingPageSize         = 14,
-    BoardNameTooLong        = 15,
-    KernelCmdlineTooLong    = 16,
+    InvalidPageSize         = 12,
+    MissingPageSize         = 13,
+    BoardNameTooLong        = 14,
+    KernelCmdlineTooLong    = 15,
 
     // Bump errors
     BumpMagicNotFound       = 20,
@@ -58,8 +53,6 @@ MB_EXPORT std::error_code make_error_code(AndroidError e);
 
 MB_EXPORT const std::error_category & android_error_category();
 
-}
-}
 }
 
 namespace std

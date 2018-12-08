@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017  Andrew Gunnerson <andrewgunnerson@gmail.com>
+ * Copyright (C) 2017-2018  Andrew Gunnerson <andrewgunnerson@gmail.com>
  *
  * This file is part of DualBootPatcher
  *
@@ -23,9 +23,7 @@
 
 #include <system_error>
 
-namespace mb
-{
-namespace bootimg
+namespace mb::bootimg
 {
 
 enum class ReaderError
@@ -35,12 +33,8 @@ enum class ReaderError
     UnknownOption           = 20,
 
     // Format errors
-    InvalidFormatCode       = 30,
-    InvalidFormatName       = 31,
-    NoFormatSelected        = 32,
-    FormatAlreadyEnabled    = 33,
-    NoFormatsRegistered     = 34,
-    UnknownFileFormat       = 35,
+    NoFormatsRegistered     = 30,
+    UnknownFileFormat       = 31,
 
     EndOfEntries            = 40,
 
@@ -51,7 +45,6 @@ MB_EXPORT std::error_code make_error_code(ReaderError e);
 
 MB_EXPORT const std::error_category & reader_error_category();
 
-}
 }
 
 namespace std

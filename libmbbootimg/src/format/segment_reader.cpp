@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017  Andrew Gunnerson <andrewgunnerson@gmail.com>
+ * Copyright (C) 2017-2018  Andrew Gunnerson <andrewgunnerson@gmail.com>
  *
  * This file is part of DualBootPatcher
  *
@@ -31,13 +31,12 @@
 
 #include "mbbootimg/entry.h"
 #include "mbbootimg/format/segment_error_p.h"
+#include "mbbootimg/reader_error.h"
 
-namespace mb
-{
-namespace bootimg
+namespace mb::bootimg
 {
 
-SegmentReader::SegmentReader()
+SegmentReader::SegmentReader() noexcept
     : m_state(SegmentReaderState::Begin)
     , m_entries()
     , m_entry(m_entries.end())
@@ -64,9 +63,9 @@ oc::result<void> SegmentReader::set_entries(std::vector<SegmentReaderEntry> entr
     return oc::success();
 }
 
-oc::result<void> SegmentReader::move_to_entry(File &file, Entry &entry,
-                                              std::vector<SegmentReaderEntry>::iterator srentry,
-                                              Reader &reader)
+oc::result<Entry>
+SegmentReader::move_to_entry(File &file,
+                             std::vector<SegmentReaderEntry>::iterator srentry)
 {
     if (srentry->offset > UINT64_MAX - srentry->size) {
         return SegmentError::EntryWouldOverflowOffset;
@@ -77,14 +76,11 @@ oc::result<void> SegmentReader::move_to_entry(File &file, Entry &entry,
     uint64_t read_cur_offset = read_start_offset;
 
     if (m_read_cur_offset != srentry->offset) {
-        auto ret = file.seek(static_cast<int64_t>(read_start_offset), SEEK_SET);
-        if (!ret) {
-            if (file.is_fatal()) { reader.set_fatal(); }
-            return ret.as_failure();
-        }
+        OUTCOME_TRYV(file.seek(static_cast<int64_t>(read_start_offset),
+                               SEEK_SET));
     }
 
-    entry.set_type(srentry->type);
+    Entry entry(srentry->type);
     entry.set_size(srentry->size);
 
     m_state = SegmentReaderState::Entries;
@@ -93,11 +89,10 @@ oc::result<void> SegmentReader::move_to_entry(File &file, Entry &entry,
     m_read_end_offset = read_end_offset;
     m_read_cur_offset = read_cur_offset;
 
-    return oc::success();
+    return std::move(entry);
 }
 
-oc::result<void> SegmentReader::read_entry(File &file, Entry &entry,
-                                           Reader &reader)
+oc::result<Entry> SegmentReader::read_entry(File &file)
 {
     auto srentry = m_entries.end();
 
@@ -114,22 +109,22 @@ oc::result<void> SegmentReader::read_entry(File &file, Entry &entry,
         return ReaderError::EndOfEntries;
     }
 
-    return move_to_entry(file, entry, srentry, reader);
+    return move_to_entry(file, srentry);
 }
 
-oc::result<void> SegmentReader::go_to_entry(File &file, Entry &entry,
-                                            int entry_type, Reader &reader)
+oc::result<Entry>
+SegmentReader::go_to_entry(File &file, std::optional<EntryType> entry_type)
 {
     decltype(m_entries)::iterator srentry;
 
-    if (entry_type == 0) {
+    if (!entry_type) {
         srentry = m_entries.begin();
     } else {
         srentry = std::find_if(
             m_entries.begin(),
             m_entries.end(),
             [&](const SegmentReaderEntry &sre) {
-                return sre.type == entry_type;
+                return sre.type == *entry_type;
             }
         );
     }
@@ -140,11 +135,11 @@ oc::result<void> SegmentReader::go_to_entry(File &file, Entry &entry,
         return ReaderError::EndOfEntries;
     }
 
-    return move_to_entry(file, entry, srentry, reader);
+    return move_to_entry(file, srentry);
 }
 
 oc::result<size_t> SegmentReader::read_data(File &file, void *buf,
-                                            size_t buf_size, Reader &reader)
+                                            size_t buf_size)
 {
     auto to_copy = static_cast<size_t>(std::min<uint64_t>(
             buf_size, m_read_end_offset - m_read_cur_offset));
@@ -156,25 +151,19 @@ oc::result<size_t> SegmentReader::read_data(File &file, void *buf,
     }
 
     // We allow truncation for certain things, so we can't use file_read_exact()
-    auto n = file_read_retry(file, buf, to_copy);
-    if (!n) {
-        if (file.is_fatal()) { reader.set_fatal(); }
-        return n.as_failure();
-    }
+    OUTCOME_TRY(n, file_read_retry(file, buf, to_copy));
 
-    m_read_cur_offset += n.value();
+    m_read_cur_offset += n;
 
     // Fail if we reach EOF early
-    if (n.value() < to_copy && m_read_cur_offset != m_read_end_offset
+    if (n < to_copy && m_read_cur_offset != m_read_end_offset
             && !m_entry->can_truncate) {
         //DEBUG("Entry is truncated (expected %" PRIu64 " more bytes)",
         //      m_read_end_offset - m_read_cur_offset);
-        reader.set_fatal();
         return FileError::UnexpectedEof;
     }
 
-    return n.value();
+    return n;
 }
 
-}
 }

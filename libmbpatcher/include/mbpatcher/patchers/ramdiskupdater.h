@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014-2017  Andrew Gunnerson <andrewgunnerson@gmail.com>
+ * Copyright (C) 2014-2018  Andrew Gunnerson <andrewgunnerson@gmail.com>
  *
  * This file is part of DualBootPatcher
  *
@@ -23,9 +23,7 @@
 #include "mbpatcher/patcherinterface.h"
 
 
-namespace mb
-{
-namespace patcher
+namespace mb::patcher
 {
 
 struct ZipCtx;
@@ -49,10 +47,9 @@ public:
     // Patching
     void set_file_info(const FileInfo * const info) override;
 
-    bool patch_file(ProgressUpdatedCallback progress_cb,
-                    FilesUpdatedCallback files_cb,
-                    DetailsUpdatedCallback details_cb,
-                    void *userdata) override;
+    bool patch_file(const ProgressUpdatedCallback &progress_cb,
+                    const FilesUpdatedCallback &files_cb,
+                    const DetailsUpdatedCallback &details_cb) override;
 
     void cancel_patching() override;
 
@@ -72,5 +69,4 @@ private:
     void close_output_archive();
 };
 
-}
 }

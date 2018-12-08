@@ -23,39 +23,14 @@ if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
         COMPILE_FLAGS
         "-Wno-format-nonliteral"
     )
-
-    set_source_files_properties(
-        src/external/musl/memmem.c
-        PROPERTIES
-        COMPILE_FLAGS
-        "-Wno-cast-qual -Wno-comma -Wno-conversion -Wno-sign-compare -Wno-sign-conversion"
-    )
-
-    if(ANDROID)
-        set_source_files_properties(
-            src/external/gnulib/getdelim.c
-            PROPERTIES
-            COMPILE_FLAGS
-            "-Wno-conditional-uninitialized -Wno-conversion -Wno-sign-conversion"
-        )
-    endif()
 endif()
 
-if(WIN32)
-    set_source_files_properties(
-        src/external/musl/memmem.c
-        PROPERTIES
-        COMPILE_FLAGS
-        "-Wno-cast-qual -Wno-conversion -Wno-sign-compare -Wno-sign-conversion"
-    )
-
-    set_source_files_properties(
-        src/external/gnulib/getdelim.c
-        PROPERTIES
-        COMPILE_FLAGS
-        "-Wno-conversion -Wno-sign-compare -Wno-sign-conversion"
-    )
-endif()
+set_source_files_properties(
+    src/external/iconv.cpp
+    PROPERTIES
+    COMPILE_FLAGS
+    "-Wno-conversion -Wno-sign-conversion -Wno-shadow"
+)
 
 set(variants)
 
@@ -90,32 +65,27 @@ foreach(variant ${variants})
         src/file.cpp
         src/file_error.cpp
         src/file_util.cpp
-        src/libc/stdio.cpp
-        src/libc/string.cpp
         src/locale.cpp
         src/string.cpp
         ${CMAKE_CURRENT_BINARY_DIR}/gen/version.cpp
     )
 
-    if(ANDROID)
-        target_sources(${lib_target} PRIVATE src/external/musl/memmem.c)
-
-        if(${ANDROID_PLATFORM_LEVEL} LESS 21)
-            target_sources(
-                ${lib_target}
-                PRIVATE
-                src/external/gnulib/getdelim.c
-                src/external/gnulib/getline.c
-            )
-        endif()
+    if(${MBP_BUILD_TARGET} STREQUAL android-app)
+        target_sources(
+            ${lib_target}
+            PRIVATE
+            src/external/iconv.cpp
+        )
+        target_compile_definitions(
+            ${lib_target}
+            PRIVATE
+            -DUSE_EXTERNAL_ICONV
+        )
     elseif(WIN32)
         target_sources(
             ${lib_target}
             PRIVATE
             src/file/win32.cpp
-            src/external/gnulib/getdelim.c
-            src/external/gnulib/getline.c
-            src/external/musl/memmem.c
         )
     endif()
 
@@ -142,7 +112,6 @@ foreach(variant ${variants})
     target_link_libraries(
         ${lib_target}
         PUBLIC
-        optional
         outcome
         PRIVATE
         interface.global.CXXVersion
@@ -150,13 +119,6 @@ foreach(variant ${variants})
         interface.mbcommon.private-headers
         $<$<STREQUAL:${variant},shared>:interface.mbcommon.dynamic-link>
     )
-
-    if(TARGET Iconv::Iconv)
-        target_link_libraries(
-            ${lib_target}
-            PRIVATE Iconv::Iconv
-        )
-    endif()
 
     # Install shared library
     if(${variant} STREQUAL shared)
@@ -187,6 +149,8 @@ if(variants AND MBP_ENABLE_TESTS)
         tests/test_file.cpp
         tests/test_file_error.cpp
         tests/test_file_util.cpp
+        tests/test_flags.cpp
+        tests/test_integer.cpp
         tests/test_locale.cpp
         tests/test_string.cpp
     )
@@ -213,6 +177,10 @@ if(variants AND MBP_ENABLE_TESTS)
         gmock
         gmock_main
     )
+
+    if(${MBP_BUILD_TARGET} STREQUAL android-system)
+        unix_link_executable_statically(mbcommon_tests)
+    endif()
 
     # Add to ctest
     add_test(

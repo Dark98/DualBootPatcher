@@ -92,7 +92,6 @@ foreach(variant ${variants})
         PRIVATE
         interface.global.CXXVersion
         interface.mbcommon.library
-        interface.mbdevice.private-headers
         $<$<STREQUAL:${variant},shared>:interface.mbcommon.dynamic-link>
         rapidjson
     )
@@ -130,6 +129,10 @@ if(variants AND MBP_ENABLE_TESTS)
         gtest_main
     )
 
+    if(${MBP_BUILD_TARGET} STREQUAL android-system)
+        unix_link_executable_statically(mbdevice_tests)
+    endif()
+
     # Add to ctest
     add_test(
         NAME mbdevice_tests
@@ -145,7 +148,6 @@ if(${MBP_BUILD_TARGET} STREQUAL hosttools)
         schemas2cpp
         PRIVATE
         interface.global.CXXVersion
-        interface.mbdevice.private-headers
         mbcommon-shared # Headers only
         rapidjson
     )
@@ -163,13 +165,3 @@ if(${MBP_BUILD_TARGET} STREQUAL hosttools)
         COMPONENT Applications
     )
 endif()
-
-# Interfaces
-
-add_library(interface.mbdevice.private-headers INTERFACE)
-
-target_compile_definitions(
-    interface.mbdevice.private-headers
-    INTERFACE
-    -DMBDEVICE_BUILD
-)

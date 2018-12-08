@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014-2017  Andrew Gunnerson <andrewgunnerson@gmail.com>
+ * Copyright (C) 2014-2018  Andrew Gunnerson <andrewgunnerson@gmail.com>
  *
  * This file is part of DualBootPatcher
  *
@@ -32,11 +32,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "mbcommon/error_code.h"
+#include "mbcommon/file_error.h"
 #include "mbcommon/finally.h"
 
-namespace mb
-{
-namespace util
+namespace mb::util
 {
 
 using ScopedFILE = std::unique_ptr<FILE, decltype(fclose) *>;
@@ -47,39 +47,35 @@ using ScopedFILE = std::unique_ptr<FILE, decltype(fclose) *>;
  * \note Returns 0 if file already exists
  *
  * \param path File to create
- * \return true on success, false on failure with errno set appropriately
+ *
+ * \return Nothing on success or the error code on failure
  */
-bool create_empty_file(const std::string &path)
+oc::result<void> create_empty_file(const std::string &path)
 {
-    int fd;
-    if ((fd = open(path.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR |
-                                                   S_IRGRP | S_IWGRP |
-                                                   S_IROTH | S_IWOTH)) < 0) {
-        return false;
+    if (int fd = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0666);
+            fd >= 0) {
+        close(fd);
+        return oc::success();
+    } else {
+        return ec_from_errno();
     }
-
-    close(fd);
-    return true;
 }
 
 /*!
  * \brief Get first line from file
  *
+ * The trailing newline (if exists) will be stripped from the result.
+ *
  * \param path File to read
- * \param line_out Pointer to char * which will contain the first line
  *
- * \note line_out will point to a dynamically allocated buffer that should be
- *       free()'d when it is no longer needed
- *
- * \note line_out is not modified if this function fails
- *
- * \return true on success, false on failure and errno set appropriately
+ * \return Nothing on success or the error code on failure. Returns
+ *         FileError::UnexpectedEof if the file is empty.
  */
-bool file_first_line(const std::string &path, std::string &line_out)
+oc::result<std::string> file_first_line(const std::string &path)
 {
-    ScopedFILE fp(fopen(path.c_str(), "rb"), fclose);
+    ScopedFILE fp(fopen(path.c_str(), "rbe"), fclose);
     if (!fp) {
-        return false;
+        return ec_from_errno();
     }
 
     char *line = nullptr;
@@ -91,7 +87,11 @@ bool file_first_line(const std::string &path, std::string &line_out)
     });
 
     if ((read = getline(&line, &len, fp.get())) < 0) {
-        return false;
+        if (ferror(fp.get())) {
+            return ec_from_errno();
+        } else {
+            return FileError::UnexpectedEof;
+        }
     }
 
     if (read > 0 && line[read - 1] == '\n') {
@@ -99,9 +99,7 @@ bool file_first_line(const std::string &path, std::string &line_out)
         --read;
     }
 
-    line_out = line;
-
-    return true;
+    return line;
 }
 
 /*!
@@ -111,44 +109,43 @@ bool file_first_line(const std::string &path, std::string &line_out)
  * \param data Pointer to data to write
  * \param size Size of \a data
  *
- * \return true on success, false on failure and errno set appropriately
+ * \return Nothing on success or the error code on failure. Returns
+ *         FileError::UnexpectedEof if EOF is reached before the write
+ *         completes.
  */
-bool file_write_data(const std::string &path,
-                     const void *data, size_t size)
+oc::result<void> file_write_data(const std::string &path,
+                                 const void *data, size_t size)
 {
-    FILE *fp = fopen(path.c_str(), "wb");
+    ScopedFILE fp(fopen(path.c_str(), "wbe"), fclose);
     if (!fp) {
-        return false;
+        return ec_from_errno();
     }
 
-    size_t nwritten;
-
-    do {
-        if ((nwritten = std::fwrite(data, 1, size, fp)) == 0) {
-            break;
+    size_t n = std::fwrite(data, 1, size, fp.get());
+    if (n != size) {
+        if (ferror(fp.get())) {
+            return ec_from_errno();
+        } else {
+            return FileError::UnexpectedEof;
         }
-
-        size -= nwritten;
-        data = static_cast<const char *>(data) + nwritten;
-    } while (size > 0);
-
-    bool ret = size == 0 || !ferror(fp);
-
-    if (fclose(fp) < 0) {
-        return false;
     }
 
-    return ret;
+    if (fclose(fp.release()) != 0) {
+        return ec_from_errno();
+    }
+
+    return oc::success();
 }
 
-bool file_find_one_of(const std::string &path, std::vector<std::string> items)
+oc::result<bool> file_find_one_of(const std::string &path,
+                                  const std::vector<std::string> &items)
 {
     struct stat sb;
     void *map = MAP_FAILED;
     int fd = -1;
 
-    if ((fd = open(path.c_str(), O_RDONLY)) < 0) {
-        return false;
+    if ((fd = open(path.c_str(), O_RDONLY | O_CLOEXEC)) < 0) {
+        return ec_from_errno();
     }
 
     auto close_fd = finally([&] {
@@ -156,13 +153,13 @@ bool file_find_one_of(const std::string &path, std::vector<std::string> items)
     });
 
     if (fstat(fd, &sb) < 0) {
-        return false;
+        return ec_from_errno();
     }
 
     map = mmap(nullptr, static_cast<size_t>(sb.st_size), PROT_READ, MAP_PRIVATE,
                fd, 0);
     if (map == MAP_FAILED) {
-        return false;
+        return ec_from_errno();
     }
 
     auto unmap_map = finally([&] {
@@ -179,63 +176,54 @@ bool file_find_one_of(const std::string &path, std::vector<std::string> items)
     return false;
 }
 
-bool file_read_all(const std::string &path,
-                   std::vector<unsigned char> &data_out)
+oc::result<std::string> file_read_all(const std::string &path)
 {
-    ScopedFILE fp(fopen(path.c_str(), "rb"), fclose);
+    ScopedFILE fp(fopen(path.c_str(), "rbe"), fclose);
     if (!fp) {
-        return false;
+        return ec_from_errno();
     }
 
-    fseek(fp.get(), 0, SEEK_END);
-    auto size = ftello(fp.get());
-    rewind(fp.get());
+    std::string data;
 
-    std::vector<unsigned char> data(static_cast<size_t>(size));
-    if (fread(data.data(), static_cast<size_t>(size), 1, fp.get()) != 1) {
-        return false;
+    // Reduce allocations if possible
+    if (fseeko(fp.get(), 0, SEEK_END) == 0) {
+        auto size = ftello(fp.get());
+        if (size < 0) {
+            return ec_from_errno();
+        } else if (std::make_unsigned_t<decltype(size)>(size) > SIZE_MAX) {
+            return std::errc::result_out_of_range;
+        }
+
+        data.reserve(static_cast<size_t>(size));
+    }
+    if (fseeko(fp.get(), 0, SEEK_SET) < 0) {
+        return ec_from_errno();
     }
 
-    data_out.swap(data);
+    char buf[8192];
 
-    return true;
+    while (true) {
+        auto n = fread(buf, 1, sizeof(buf), fp.get());
+
+        data.insert(data.end(), buf, buf + n);
+
+        if (n < sizeof(buf)) {
+            if (ferror(fp.get())) {
+                return ec_from_errno();
+            } else {
+                break;
+            }
+        }
+    }
+
+    return std::move(data);
 }
 
-bool file_read_all(const std::string &path,
-                   unsigned char *&data_out,
-                   std::size_t &size_out)
+oc::result<uint64_t> get_blockdev_size(const std::string &path)
 {
-    ScopedFILE fp(fopen(path.c_str(), "rb"), fclose);
-    if (!fp) {
-        return false;
-    }
-
-    fseek(fp.get(), 0, SEEK_END);
-    auto size = ftello(fp.get());
-    rewind(fp.get());
-
-    auto data = static_cast<unsigned char *>(
-            std::malloc(static_cast<size_t>(size)));
-    if (!data) {
-        return false;
-    }
-
-    if (fread(data, static_cast<size_t>(size), 1, fp.get()) != 1) {
-        free(data);
-        return false;
-    }
-
-    data_out = data;
-    size_out = static_cast<size_t>(size);
-
-    return true;
-}
-
-bool get_blockdev_size(const std::string &path, uint64_t &size_out)
-{
-    int fd = open(path.c_str(), O_RDONLY);
+    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
-        return false;
+        return ec_from_errno();
     }
 
     auto close_fd = finally([&]{
@@ -247,15 +235,12 @@ bool get_blockdev_size(const std::string &path, uint64_t &size_out)
 
     uint64_t size;
     if (ioctl(fd, BLKGETSIZE64, &size) < 0) {
-        return false;
+        return ec_from_errno();
     }
 
 #pragma GCC diagnostic pop
 
-    size_out = size;
-
-    return true;
+    return size;
 }
 
-}
 }

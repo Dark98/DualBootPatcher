@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014-2017  Andrew Gunnerson <andrewgunnerson@gmail.com>
+ * Copyright (C) 2014-2018  Andrew Gunnerson <andrewgunnerson@gmail.com>
  *
  * This file is part of DualBootPatcher
  *
@@ -34,11 +34,8 @@
 #define LOG_TAG "mbpatcher/patchers/ramdiskupdater"
 
 
-namespace mb
+namespace mb::patcher
 {
-namespace patcher
-{
-
 
 const std::string RamdiskUpdater::Id("RamdiskUpdater");
 
@@ -74,15 +71,13 @@ void RamdiskUpdater::cancel_patching()
     m_cancelled = true;
 }
 
-bool RamdiskUpdater::patch_file(ProgressUpdatedCallback progress_cb,
-                                FilesUpdatedCallback files_cb,
-                                DetailsUpdatedCallback details_cb,
-                                void *userdata)
+bool RamdiskUpdater::patch_file(const ProgressUpdatedCallback &progress_cb,
+                                const FilesUpdatedCallback &files_cb,
+                                const DetailsUpdatedCallback &details_cb)
 {
     (void) progress_cb;
     (void) files_cb;
     (void) details_cb;
-    (void) userdata;
 
     m_cancelled = false;
 
@@ -117,7 +112,7 @@ bool RamdiskUpdater::create_zip()
         return false;
     }
 
-    zipFile zf = MinizipUtils::ctx_get_zip_file(m_z_output);
+    void *handle = MinizipUtils::ctx_get_zip_handle(m_z_output);
 
     if (m_cancelled) return false;
 
@@ -160,7 +155,8 @@ bool RamdiskUpdater::create_zip()
     for (const CopySpec &spec : toCopy) {
         if (m_cancelled) return false;
 
-        result = MinizipUtils::add_file(zf, spec.target, spec.source);
+        result = MinizipUtils::add_file_from_path(
+                handle, spec.target, spec.source);
         if (result != ErrorCode::NoError) {
             m_error = result;
             return false;
@@ -169,11 +165,9 @@ bool RamdiskUpdater::create_zip()
 
     if (m_cancelled) return false;
 
-    const std::string info_prop =
-            ZipPatcher::create_info_prop(m_info->rom_id(), true);
-    result = MinizipUtils::add_file(
-            zf, "multiboot/info.prop",
-            std::vector<unsigned char>(info_prop.begin(), info_prop.end()));
+    result = MinizipUtils::add_file_from_data(
+            handle, "multiboot/info.prop",
+            ZipPatcher::create_info_prop(m_info->rom_id()));
     if (result != ErrorCode::NoError) {
         m_error = result;
         return false;
@@ -187,9 +181,8 @@ bool RamdiskUpdater::create_zip()
         return false;
     }
 
-    result = MinizipUtils::add_file(
-            zf, "multiboot/device.json",
-            std::vector<unsigned char>(json.begin(), json.end()));
+    result = MinizipUtils::add_file_from_data(
+            handle, "multiboot/device.json", json);
     if (result != ErrorCode::NoError) {
         m_error = result;
         return false;
@@ -198,12 +191,9 @@ bool RamdiskUpdater::create_zip()
     if (m_cancelled) return false;
 
     // Create dummy "installer"
-    std::string installer("#!/sbin/sh");
-
-    result = MinizipUtils::add_file(
-            zf, "META-INF/com/google/android/update-binary.orig",
-            std::vector<unsigned char>(installer.begin(), installer.end()));
-
+    result = MinizipUtils::add_file_from_data(
+            handle, "META-INF/com/google/android/update-binary.orig",
+            "#!/sbin/sh");
     if (result != ErrorCode::NoError) {
         m_error = result;
         return false;
@@ -218,7 +208,8 @@ bool RamdiskUpdater::open_output_archive()
 {
     assert(m_z_output == nullptr);
 
-    m_z_output = MinizipUtils::open_output_file(m_info->output_path());
+    m_z_output = MinizipUtils::open_zip_file(m_info->output_path(),
+                                             ZipOpenMode::Write);
 
     if (!m_z_output) {
         LOGE("minizip: Failed to open for writing: %s",
@@ -234,13 +225,12 @@ void RamdiskUpdater::close_output_archive()
 {
     assert(m_z_output != nullptr);
 
-    int ret = MinizipUtils::close_output_file(m_z_output);
-    if (ret != ZIP_OK) {
+    int ret = MinizipUtils::close_zip_file(m_z_output);
+    if (ret != MZ_OK) {
         LOGW("minizip: Failed to close archive (error code: %d)", ret);
     }
 
     m_z_output = nullptr;
 }
 
-}
 }

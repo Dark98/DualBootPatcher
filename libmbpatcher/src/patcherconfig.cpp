@@ -27,16 +27,15 @@
 #include "mbpatcher/private/fileutils.h"
 
 // Patchers
-#include "mbpatcher/autopatchers/standardpatcher.h"
+#include "mbpatcher/autopatchers/magiskpatcher.h"
 #include "mbpatcher/autopatchers/mountcmdpatcher.h"
+#include "mbpatcher/autopatchers/standardpatcher.h"
 #include "mbpatcher/patchers/odinpatcher.h"
 #include "mbpatcher/patchers/ramdiskupdater.h"
 #include "mbpatcher/patchers/zippatcher.h"
 
 
-namespace mb
-{
-namespace patcher
+namespace mb::patcher
 {
 
 /*!
@@ -134,8 +133,9 @@ std::vector<std::string> PatcherConfig::patchers() const
 std::vector<std::string> PatcherConfig::auto_patchers() const
 {
     return {
+        MagiskPatcher::Id,
+        MountCmdPatcher::Id,
         StandardPatcher::Id,
-        MountCmdPatcher::Id
     };
 }
 
@@ -180,10 +180,12 @@ AutoPatcher * PatcherConfig::create_auto_patcher(const std::string &id,
 {
     std::unique_ptr<AutoPatcher> ap;
 
-    if (id == StandardPatcher::Id) {
-        ap = std::make_unique<StandardPatcher>(*this, info);
+    if (id == MagiskPatcher::Id) {
+        ap = std::make_unique<MagiskPatcher>(*this, info);
     } else if (id == MountCmdPatcher::Id) {
         ap = std::make_unique<MountCmdPatcher>(*this, info);
+    } else if (id == StandardPatcher::Id) {
+        ap = std::make_unique<StandardPatcher>(*this, info);
     }
 
     if (!ap) {
@@ -231,5 +233,4 @@ void PatcherConfig::destroy_auto_patcher(AutoPatcher *patcher)
     m_auto_patchers.erase(it);
 }
 
-}
 }

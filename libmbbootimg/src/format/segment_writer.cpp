@@ -32,13 +32,12 @@
 #include "mbbootimg/entry.h"
 #include "mbbootimg/format/align_p.h"
 #include "mbbootimg/format/segment_error_p.h"
+#include "mbbootimg/writer_error.h"
 
-namespace mb
-{
-namespace bootimg
+namespace mb::bootimg
 {
 
-SegmentWriter::SegmentWriter()
+SegmentWriter::SegmentWriter() noexcept
     : m_state(SegmentWriterState::Begin)
     , m_entries()
     , m_entry()
@@ -76,17 +75,12 @@ void SegmentWriter::update_size_if_unset(uint32_t size)
     }
 }
 
-oc::result<void> SegmentWriter::get_entry(File &file, Entry &entry,
-                                          Writer &writer)
+oc::result<Entry> SegmentWriter::get_entry(File &file)
 {
     if (!m_pos) {
-        auto pos = file.seek(0, SEEK_CUR);
-        if (!pos) {
-            if (file.is_fatal()) { writer.set_fatal(); }
-            return pos.as_failure();
-        }
+        OUTCOME_TRY(pos, file.seek(0, SEEK_CUR));
 
-        m_pos = pos.value();
+        m_pos = pos;
     }
 
     // Get next entry
@@ -108,21 +102,18 @@ oc::result<void> SegmentWriter::get_entry(File &file, Entry &entry,
     // Update starting offset
     swentry->offset = *m_pos;
 
-    entry.clear();
-    entry.set_type(swentry->type);
+    Entry entry(swentry->type);
 
     m_entry_size = 0;
     m_state = SegmentWriterState::Entries;
     m_entry = swentry;
 
-    return oc::success();
+    return std::move(entry);
 }
 
-oc::result<void> SegmentWriter::write_entry(File &file, const Entry &entry,
-                                            Writer &writer)
+oc::result<void> SegmentWriter::write_entry(File &file, const Entry &entry)
 {
     (void) file;
-    (void) writer;
 
     // Use entry size if specified
     auto size = entry.size();
@@ -139,7 +130,7 @@ oc::result<void> SegmentWriter::write_entry(File &file, const Entry &entry,
 }
 
 oc::result<size_t> SegmentWriter::write_data(File &file, const void *buf,
-                                             size_t buf_size, Writer &writer)
+                                             size_t buf_size)
 {
     // Check for overflow
     if (buf_size > UINT32_MAX || m_entry_size > UINT32_MAX - buf_size
@@ -149,9 +140,6 @@ oc::result<size_t> SegmentWriter::write_data(File &file, const void *buf,
 
     auto ret = file_write_exact(file, buf, buf_size);
     if (!ret) {
-        // This is a fatal error. We must guarantee that buf_size bytes will be
-        // written.
-        writer.set_fatal();
         return ret.as_failure();
     }
 
@@ -161,7 +149,7 @@ oc::result<size_t> SegmentWriter::write_data(File &file, const void *buf,
     return buf_size;
 }
 
-oc::result<void> SegmentWriter::finish_entry(File &file, Writer &writer)
+oc::result<void> SegmentWriter::finish_entry(File &file)
 {
     // Update size with number of bytes written
     update_size_if_unset(m_entry_size);
@@ -170,17 +158,12 @@ oc::result<void> SegmentWriter::finish_entry(File &file, Writer &writer)
     if (m_entry->align > 0) {
         auto skip = align_page_size<uint64_t>(*m_pos, m_entry->align);
 
-        auto new_pos = file.seek(static_cast<int64_t>(skip), SEEK_CUR);
-        if (!new_pos) {
-            if (file.is_fatal()) { writer.set_fatal(); }
-            return new_pos.as_failure();
-        }
+        OUTCOME_TRY(new_pos, file.seek(static_cast<int64_t>(skip), SEEK_CUR));
 
-        m_pos = new_pos.value();
+        m_pos = new_pos;
     }
 
     return oc::success();
 }
 
-}
 }

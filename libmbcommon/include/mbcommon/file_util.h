@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017  Andrew Gunnerson <andrewgunnerson@gmail.com>
+ * Copyright (C) 2017-2018  Andrew Gunnerson <andrewgunnerson@gmail.com>
  *
  * This file is part of DualBootPatcher
  *
@@ -19,6 +19,9 @@
 
 #pragma once
 
+#include <functional>
+#include <optional>
+
 #include "mbcommon/file.h"
 
 namespace mb
@@ -30,9 +33,8 @@ enum class FileSearchAction
     Stop,
 };
 
-using FileSearchResultCallback =
-        oc::result<FileSearchAction> (*)(File &file, void *userdata,
-                                         uint64_t offset);
+using FileSearchResultCallback = std::function<oc::result<FileSearchAction>
+        (File &file, uint64_t offset)>;
 
 MB_EXPORT oc::result<size_t> file_read_retry(File &file,
                                              void *buf, size_t size);
@@ -46,11 +48,13 @@ MB_EXPORT oc::result<void> file_write_exact(File &file,
 
 MB_EXPORT oc::result<uint64_t> file_read_discard(File &file, uint64_t size);
 
-MB_EXPORT oc::result<void> file_search(File &file, int64_t start, int64_t end,
+MB_EXPORT oc::result<void> file_search(File &file,
+                                       std::optional<uint64_t> start,
+                                       std::optional<uint64_t> end,
                                        size_t bsize, const void *pattern,
-                                       size_t pattern_size, int64_t max_matches,
-                                       FileSearchResultCallback result_cb,
-                                       void *userdata);
+                                       size_t pattern_size,
+                                       std::optional<uint64_t> max_matches,
+                                       const FileSearchResultCallback &result_cb);
 
 MB_EXPORT oc::result<uint64_t> file_move(File &file, uint64_t src,
                                          uint64_t dest, uint64_t size);

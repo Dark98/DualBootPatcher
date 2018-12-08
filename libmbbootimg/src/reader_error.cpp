@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017  Andrew Gunnerson <andrewgunnerson@gmail.com>
+ * Copyright (C) 2017-2018  Andrew Gunnerson <andrewgunnerson@gmail.com>
  *
  * This file is part of DualBootPatcher
  *
@@ -21,9 +21,7 @@
 
 #include <string>
 
-namespace mb
-{
-namespace bootimg
+namespace mb::bootimg
 {
 
 struct ReaderErrorCategory : std::error_category
@@ -56,14 +54,6 @@ std::string ReaderErrorCategory::message(int ev) const
         return "invalid state";
     case ReaderError::UnknownOption:
         return "unknown option";
-    case ReaderError::InvalidFormatCode:
-        return "invalid format code";
-    case ReaderError::InvalidFormatName:
-        return "invalid format name";
-    case ReaderError::NoFormatSelected:
-        return "no format selected";
-    case ReaderError::FormatAlreadyEnabled:
-        return "format already enabled";
     case ReaderError::NoFormatsRegistered:
         return "no formats registered";
     case ReaderError::UnknownFileFormat:
@@ -77,5 +67,4 @@ std::string ReaderErrorCategory::message(int ev) const
     }
 }
 
-}
 }

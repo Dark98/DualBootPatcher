@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017  Andrew Gunnerson <andrewgunnerson@gmail.com>
+ * Copyright (C) 2017-2018  Andrew Gunnerson <andrewgunnerson@gmail.com>
  *
  * This file is part of DualBootPatcher
  *
@@ -21,15 +21,16 @@
 
 #include "mbbootimg/guard_p.h"
 
+#include <optional>
 #include <vector>
 
 #include <cstdint>
 
-#include "mbbootimg/reader.h"
+#include "mbcommon/file.h"
 
-namespace mb
-{
-namespace bootimg
+#include "mbbootimg/entry.h"
+
+namespace mb::bootimg
 {
 
 enum class SegmentReaderState
@@ -41,7 +42,7 @@ enum class SegmentReaderState
 
 struct SegmentReaderEntry
 {
-    int type;
+    EntryType type;
     uint64_t offset;
     uint32_t size;
     bool can_truncate;
@@ -50,20 +51,17 @@ struct SegmentReaderEntry
 class SegmentReader
 {
 public:
-    SegmentReader();
+    SegmentReader() noexcept;
 
     const std::vector<SegmentReaderEntry> & entries() const;
     oc::result<void> set_entries(std::vector<SegmentReaderEntry> entries);
 
-    oc::result<void> move_to_entry(File &file, Entry &entry,
-                                   std::vector<SegmentReaderEntry>::iterator srentry,
-                                   Reader &reader);
+    oc::result<Entry> move_to_entry(File &file,
+                                    std::vector<SegmentReaderEntry>::iterator srentry);
 
-    oc::result<void> read_entry(File &file, Entry &entry, Reader &reader);
-    oc::result<void> go_to_entry(File &file, Entry &entry, int entry_type,
-                                 Reader &reader);
-    oc::result<size_t> read_data(File &file, void *buf, size_t buf_size,
-                                 Reader &reader);
+    oc::result<Entry> read_entry(File &file);
+    oc::result<Entry> go_to_entry(File &file, std::optional<EntryType> entry_type);
+    oc::result<size_t> read_data(File &file, void *buf, size_t buf_size);
 
 private:
     SegmentReaderState m_state;
@@ -76,5 +74,4 @@ private:
     uint64_t m_read_cur_offset;
 };
 
-}
 }

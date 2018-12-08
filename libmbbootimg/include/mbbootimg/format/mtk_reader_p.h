@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017  Andrew Gunnerson <andrewgunnerson@gmail.com>
+ * Copyright (C) 2017-2018  Andrew Gunnerson <andrewgunnerson@gmail.com>
  *
  * This file is part of DualBootPatcher
  *
@@ -21,39 +21,32 @@
 
 #include "mbbootimg/guard_p.h"
 
-#include "mbcommon/optional.h"
-
 #include "mbbootimg/format/android_p.h"
 #include "mbbootimg/format/mtk_p.h"
 #include "mbbootimg/format/segment_reader_p.h"
-#include "mbbootimg/reader.h"
 #include "mbbootimg/reader_p.h"
 
 
-namespace mb
-{
-namespace bootimg
-{
-namespace mtk
+namespace mb::bootimg::mtk
 {
 
 class MtkFormatReader : public detail::FormatReader
 {
 public:
-    MtkFormatReader(Reader &reader);
-    virtual ~MtkFormatReader();
+    MtkFormatReader() noexcept;
+    virtual ~MtkFormatReader() noexcept;
 
     MB_DISABLE_COPY_CONSTRUCT_AND_ASSIGN(MtkFormatReader)
     MB_DEFAULT_MOVE_CONSTRUCT_AND_ASSIGN(MtkFormatReader)
 
-    int type() override;
-    std::string name() override;
+    Format type() override;
 
     oc::result<int> open(File &file, int best_bid) override;
     oc::result<void> close(File &file) override;
-    oc::result<void> read_header(File &file, Header &header) override;
-    oc::result<void> read_entry(File &file, Entry &entry) override;
-    oc::result<void> go_to_entry(File &file, Entry &entry, int entry_type) override;
+    oc::result<Header> read_header(File &file) override;
+    oc::result<Entry> read_entry(File &file) override;
+    oc::result<Entry> go_to_entry(File &file,
+                                  std::optional<EntryType> entry_type) override;
     oc::result<size_t> read_data(File &file, void *buf, size_t buf_size) override;
 
 private:
@@ -63,13 +56,11 @@ private:
     MtkHeader m_mtk_ramdisk_hdr;
 
     // Offsets
-    optional<uint64_t> m_header_offset;
-    optional<uint64_t> m_mtk_kernel_offset;
-    optional<uint64_t> m_mtk_ramdisk_offset;
+    std::optional<uint64_t> m_hdr_offset;
+    std::optional<uint64_t> m_mtk_kernel_offset;
+    std::optional<uint64_t> m_mtk_ramdisk_offset;
 
-    optional<SegmentReader> m_seg;
+    std::optional<SegmentReader> m_seg;
 };
 
-}
-}
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014-2017  Andrew Gunnerson <andrewgunnerson@gmail.com>
+ * Copyright (C) 2014-2018  Andrew Gunnerson <andrewgunnerson@gmail.com>
  *
  * This file is part of DualBootPatcher
  *
@@ -20,11 +20,14 @@
 #include "mbutil/archive.h"
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <cerrno>
 #include <cstring>
 
+#include "mbcommon/file/standard.h"
 #include "mbcommon/finally.h"
+#include "mbcommon/string.h"
 #include "mblog/logging.h"
 #include "mbutil/directory.h"
 #include "mbutil/path.h"
@@ -46,9 +49,7 @@
 #define LIBARCHIVE_DISK_READER_FLAGS \
     ARCHIVE_READDISK_MAC_COPYFILE
 
-namespace mb
-{
-namespace util
+namespace mb::util
 {
 
 using ScopedArchive = std::unique_ptr<archive, decltype(archive_free) *>;
@@ -92,11 +93,9 @@ bool libarchive_copy_data_disk_to_archive(archive *in, archive *out,
     ssize_t bytes_written;
     int64_t offset;
     int64_t progress = 0;
-    char null_buf[64 * 1024];
+    char null_buf[64 * 1024] = {};
     const void *buf;
     int ret;
-
-    memset(null_buf, 0, sizeof(null_buf));
 
     while ((ret = archive_read_data_block(
             in, &buf, &bytes_read, &offset)) == ARCHIVE_OK) {
@@ -168,17 +167,192 @@ int libarchive_copy_header_and_data(archive *in, archive *out,
     return ret;
 }
 
+struct SplitCtx
+{
+    // Current file
+    StandardFile file;
+    // Base path if split. Otherwise, the exact file path
+    std::string path;
+    // Current split file. -1 to disable splitting
+    int split_num;
+    // Whether the file should be opened on the next read/write
+    bool need_open = true;
+
+    SplitCtx(std::string path, bool is_split)
+        : path(std::move(path))
+        , split_num(is_split ? 0 : -1)
+    {
+    }
+
+    bool is_split()
+    {
+        return split_num >= 0;
+    }
+
+    oc::result<void> open_if_needed(FileOpenMode mode)
+    {
+        if (need_open) {
+            if (file.is_open()) {
+                OUTCOME_TRYV(file.close());
+            }
+
+            std::string filename(path);
+            if (is_split()) {
+                filename += format(".%d", split_num);
+            }
+
+            OUTCOME_TRYV(file.open(filename, mode));
+
+            need_open = false;
+        }
+
+        return oc::success();
+    }
+
+    void move_to_next()
+    {
+        ++split_num;
+        need_open = true;
+    }
+
+    static void set_archive_error(archive *a, std::error_code ec)
+    {
+        archive_set_error(a, ec.value(), "%s", ec.message().c_str());
+    }
+
+    static int la_close_cb(archive *a, void *userdata)
+    {
+        auto *ctx = static_cast<SplitCtx *>(userdata);
+
+        if (ctx->file.is_open()) {
+            if (auto r = ctx->file.close(); !r) {
+                set_archive_error(a, r.error());
+                return ARCHIVE_FATAL;
+            }
+        }
+
+        return ARCHIVE_OK;
+    }
+};
+
+struct SplitReaderCtx : SplitCtx
+{
+    // Read buffer
+    std::array<char, 10240> buf;
+
+    SplitReaderCtx(std::string path, bool is_split)
+        : SplitCtx(std::move(path), is_split)
+    {
+    }
+
+    static la_ssize_t la_read_cb(archive *a, void *userdata,
+                                 const void **buffer)
+    {
+        auto *ctx = static_cast<SplitReaderCtx *>(userdata);
+
+        while (true) {
+            if (auto r = ctx->open_if_needed(FileOpenMode::ReadOnly); !r) {
+                if (r.error() == std::errc::no_such_file_or_directory) {
+                    return 0;
+                } else {
+                    set_archive_error(a, r.error());
+                    return -1;
+                }
+            }
+
+            auto n = ctx->file.read(ctx->buf.data(), ctx->buf.size());
+            if (!n) {
+                set_archive_error(a, n.error());
+                return -1;
+            }
+
+            if (n.value() == 0 && ctx->is_split()) {
+                ctx->move_to_next();
+                continue;
+            }
+
+            *buffer = ctx->buf.data();
+            return static_cast<la_ssize_t>(n.value());
+        }
+    }
+
+    int archive_open(archive *a)
+    {
+        return archive_read_open(a, this, nullptr, &la_read_cb, &la_close_cb);
+    }
+};
+
+struct SplitWriterCtx : SplitCtx
+{
+    // Bytes written for current file
+    uint64_t bytes_written;
+    // Max size of split files
+    uint64_t max_size;
+
+    SplitWriterCtx(std::string path, uint64_t max_size)
+        : SplitCtx(std::move(path), max_size > 0)
+        , bytes_written(0)
+        , max_size(max_size)
+    {
+    }
+
+    static la_ssize_t la_write_cb(archive *a, void *userdata, const void *data,
+                                  size_t size)
+    {
+        auto *ctx = static_cast<SplitWriterCtx *>(userdata);
+
+        const char *ptr = static_cast<const char *>(data);
+        size_t remain = size;
+
+        while (remain > 0) {
+            if (auto r = ctx->open_if_needed(FileOpenMode::WriteOnly); !r) {
+                set_archive_error(a, r.error());
+                return -1;
+            }
+
+            auto to_write = static_cast<size_t>(std::min<uint64_t>(
+                    remain,
+                    ctx->is_split()
+                    ? (ctx->max_size - ctx->bytes_written)
+                    : remain));
+
+            auto n = ctx->file.write(ptr, to_write);
+            if (!n) {
+                set_archive_error(a, n.error());
+                return -1;
+            }
+
+            ctx->bytes_written += n.value();
+            ptr += n.value();
+            remain -= n.value();
+
+            if (ctx->is_split() && ctx->bytes_written == ctx->max_size) {
+                ctx->bytes_written = 0;
+                ctx->move_to_next();
+            }
+        }
+
+        return static_cast<la_ssize_t>(size);
+    }
+
+    int archive_open(archive *a)
+    {
+        return archive_write_open(a, this, nullptr, &la_write_cb, &la_close_cb);
+    }
+};
+
 /*
  * The following libarchive functions are based on code from bsdtar. The main
  * difference is that they will not try to extract/add as many files as possible
  * from/to the archive. They'll immediately fail after the first error or
- * warning because an incomplete archive is useless for backup and restoring.
+ * warning because an incomplete archive is useless for backups and restores.
  */
 
 bool libarchive_tar_extract(const std::string &filename,
                             const std::string &target,
                             const std::vector<std::string> &patterns,
-                            CompressionType compression)
+                            CompressionType compression,
+                            bool is_split)
 {
     if (target.empty()) {
         LOGE("%s: Invalid target path for extraction", target.c_str());
@@ -235,8 +409,8 @@ bool libarchive_tar_extract(const std::string &filename,
     archive_write_disk_set_standard_lookup(out.get());
     archive_write_disk_set_options(out.get(), LIBARCHIVE_DISK_WRITER_FLAGS);
 
-    if (archive_read_open_filename(
-            in.get(), filename.c_str(), 10240) != ARCHIVE_OK) {
+    SplitReaderCtx ctx(filename, is_split);
+    if (ctx.archive_open(in.get()) != ARCHIVE_OK) {
         LOGE("%s: Failed to open file: %s",
              filename.c_str(), archive_error_string(in.get()));
         return false;
@@ -349,7 +523,8 @@ static int metadata_filter(archive *a, void *data, archive_entry *entry)
 bool libarchive_tar_create(const std::string &filename,
                            const std::string &base_dir,
                            const std::vector<std::string> &paths,
-                           CompressionType compression)
+                           CompressionType compression,
+                           uint64_t split_archive_size)
 {
     if (base_dir.empty() && paths.empty()) {
         LOGE("%s: No base directory or paths specified", filename.c_str());
@@ -416,7 +591,8 @@ bool libarchive_tar_create(const std::string &filename,
                                             archive_format(out.get()));
 
     // Open output file
-    if (archive_write_open_filename(out.get(), filename.c_str()) != ARCHIVE_OK) {
+    SplitWriterCtx ctx(filename, split_archive_size);
+    if (ctx.archive_open(out.get()) != ARCHIVE_OK) {
         LOGE("%s: Failed to open file: %s",
              filename.c_str(), archive_error_string(out.get()));
         return false;
@@ -473,20 +649,21 @@ bool libarchive_tar_create(const std::string &filename,
             // the archive path to the relative path starting at base_dir
             const char *curpath = archive_entry_pathname(entry);
             if (curpath && path[0] != '/' && !base_dir.empty()) {
-                std::string relpath;
-                if (!relative_path(curpath, base_dir, relpath)) {
+                auto relpath = relative_path(curpath, base_dir);
+                if (!relpath) {
                     LOGE("Failed to compute relative path of %s starting at %s: %s",
-                         curpath, base_dir.c_str(), strerror(errno));
+                         curpath, base_dir.c_str(),
+                         relpath.error().message().c_str());
                     archive_entry_free(entry);
                     return false;
                 }
-                if (relpath.empty()) {
+                if (relpath.value().empty()) {
                     // If the relative path is empty, then the current path is
                     // the root of the directory tree. We don't need that, so
                     // skip it.
                     continue;
                 }
-                archive_entry_set_pathname(entry, relpath.c_str());
+                archive_entry_set_pathname(entry, relpath.value().c_str());
             }
 
             switch (archive_entry_filetype(entry)) {
@@ -614,9 +791,11 @@ bool extract_archive(const std::string &filename, const std::string &target)
 
     archive_entry *entry;
     int ret;
-    std::string cwd = get_cwd();
 
-    if (cwd.empty()) {
+    auto cwd = get_cwd();
+    if (!cwd) {
+        LOGE("Failed to get working directory: %s",
+             cwd.error().message().c_str());
         return false;
     }
 
@@ -626,9 +805,9 @@ bool extract_archive(const std::string &filename, const std::string &target)
 
     set_up_output(out.get());
 
-    if (!mkdir_recursive(target, S_IRWXU | S_IRWXG | S_IRWXO)) {
+    if (auto r = mkdir_recursive(target, S_IRWXU | S_IRWXG | S_IRWXO); !r) {
         LOGE("%s: Failed to create directory: %s",
-             target.c_str(), strerror(errno));
+             target.c_str(), r.error().message().c_str());
         return false;
     }
 
@@ -639,7 +818,7 @@ bool extract_archive(const std::string &filename, const std::string &target)
     }
 
     auto chdir_back = finally([&] {
-        chdir(cwd.c_str());
+        chdir(cwd.value().c_str());
     });
 
     while ((ret = archive_read_next_header(in.get(), &entry)) == ARCHIVE_OK) {
@@ -674,10 +853,12 @@ bool extract_files(const std::string &filename, const std::string &target,
 
     archive_entry *entry;
     int ret;
-    std::string cwd = get_cwd();
     unsigned int count = 0;
 
-    if (cwd.empty()) {
+    auto cwd = get_cwd();
+    if (!cwd) {
+        LOGE("Failed to get working directory: %s",
+             cwd.error().message().c_str());
         return false;
     }
 
@@ -687,9 +868,9 @@ bool extract_files(const std::string &filename, const std::string &target,
 
     set_up_output(out.get());
 
-    if (!mkdir_recursive(target, S_IRWXU | S_IRWXG | S_IRWXO)) {
+    if (auto r = mkdir_recursive(target, S_IRWXU | S_IRWXG | S_IRWXO); !r) {
         LOGE("%s: Failed to create directory: %s",
-             target.c_str(), strerror(errno));
+             target.c_str(), r.error().message().c_str());
         return false;
     }
 
@@ -700,7 +881,7 @@ bool extract_files(const std::string &filename, const std::string &target,
     }
 
     auto chdir_back = finally([&] {
-        chdir(cwd.c_str());
+        chdir(cwd.value().c_str());
     });
 
     while ((ret = archive_read_next_header(in.get(), &entry)) == ARCHIVE_OK) {
@@ -825,5 +1006,4 @@ bool archive_exists(const std::string &filename,
     return true;
 }
 
-}
 }

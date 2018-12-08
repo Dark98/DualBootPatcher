@@ -24,6 +24,7 @@
 #include "mbcommon/string.h"
 
 using namespace mb;
+using namespace testing;
 
 TestFile::TestFile() : TestFile(nullptr)
 {
@@ -66,7 +67,7 @@ oc::result<void> TestFile::on_open()
 
     // Generate some data
     for (size_t i = 0; i < INITIAL_BUF_SIZE; ++i) {
-        _buf.push_back('a' + (i % 26));
+        _buf.push_back(static_cast<unsigned char>('a' + i % 26));
     }
 
     return oc::success();
@@ -92,7 +93,7 @@ oc::result<size_t> TestFile::on_read(void *buf, size_t size)
     }
 
     size_t empty = _buf.size() - _position;
-    uint64_t n = std::min<uint64_t>(empty, size);
+    size_t n = std::min(empty, size);
     memcpy(buf, _buf.data() + _position, n);
     _position += n;
 
@@ -124,20 +125,34 @@ oc::result<uint64_t> TestFile::on_seek(int64_t offset, int whence)
 
     switch (whence) {
     case SEEK_SET:
-        if (offset < 0) {
+        if (offset < 0 || static_cast<uint64_t>(offset) > SIZE_MAX) {
             return FileError::ArgumentOutOfRange;
         }
-        return _position = offset;
+        return _position = static_cast<size_t>(offset);
     case SEEK_CUR:
-        if (offset < 0 && static_cast<size_t>(-offset) > _position) {
-            return FileError::ArgumentOutOfRange;
+        if (offset < 0) {
+            if (static_cast<uint64_t>(-offset) > _position) {
+                return FileError::ArgumentOutOfRange;
+            }
+            return _position -= static_cast<size_t>(-offset);
+        } else {
+            if (static_cast<uint64_t>(offset) > SIZE_MAX - _position) {
+                return FileError::ArgumentOutOfRange;
+            }
+            return _position += static_cast<size_t>(offset);
         }
-        return _position += offset;
     case SEEK_END:
-        if (offset < 0 && static_cast<size_t>(-offset) > _buf.size()) {
-            return FileError::ArgumentOutOfRange;
+        if (offset < 0) {
+            if (static_cast<uint64_t>(-offset) > _buf.size()) {
+                return FileError::ArgumentOutOfRange;
+            }
+            return _position = _buf.size() - static_cast<size_t>(-offset);
+        } else {
+            if (static_cast<uint64_t>(offset) > SIZE_MAX - _buf.size()) {
+                return FileError::ArgumentOutOfRange;
+            }
+            return _position = _buf.size() + static_cast<size_t>(offset);
         }
-        return _position = _buf.size() + offset;
     default:
         MB_UNREACHABLE("Invalid whence argument: %d", whence);
     }
@@ -149,7 +164,11 @@ oc::result<void> TestFile::on_truncate(uint64_t size)
         ++_counters->n_truncate;
     }
 
-    _buf.resize(size);
+    if (size > SIZE_MAX) {
+        return FileError::ArgumentOutOfRange;
+    }
+
+    _buf.resize(static_cast<size_t>(size));
     return oc::success();
 }
 
@@ -161,17 +180,17 @@ MockTestFile::MockTestFile(TestFileCounters *counters) : TestFile(counters)
 {
     // Call original methods by default
     ON_CALL(*this, on_open())
-            .WillByDefault(testing::Invoke(this, &MockTestFile::orig_on_open));
+            .WillByDefault(Invoke(this, &MockTestFile::orig_on_open));
     ON_CALL(*this, on_close())
-            .WillByDefault(testing::Invoke(this, &MockTestFile::orig_on_close));
-    ON_CALL(*this, on_read(testing::_, testing::_))
-            .WillByDefault(testing::Invoke(this, &MockTestFile::orig_on_read));
-    ON_CALL(*this, on_write(testing::_, testing::_))
-            .WillByDefault(testing::Invoke(this, &MockTestFile::orig_on_write));
-    ON_CALL(*this, on_seek(testing::_, testing::_))
-            .WillByDefault(testing::Invoke(this, &MockTestFile::orig_on_seek));
-    ON_CALL(*this, on_truncate(testing::_))
-            .WillByDefault(testing::Invoke(this, &MockTestFile::orig_on_truncate));
+            .WillByDefault(Invoke(this, &MockTestFile::orig_on_close));
+    ON_CALL(*this, on_read(_, _))
+            .WillByDefault(Invoke(this, &MockTestFile::orig_on_read));
+    ON_CALL(*this, on_write(_, _))
+            .WillByDefault(Invoke(this, &MockTestFile::orig_on_write));
+    ON_CALL(*this, on_seek(_, _))
+            .WillByDefault(Invoke(this, &MockTestFile::orig_on_seek));
+    ON_CALL(*this, on_truncate(_))
+            .WillByDefault(Invoke(this, &MockTestFile::orig_on_truncate));
 }
 
 MockTestFile::~MockTestFile()
